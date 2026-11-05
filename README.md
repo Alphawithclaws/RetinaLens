@@ -1,125 +1,139 @@
-# RetinaLens
+# 👁️ RetinaLens
 
-A small research prototype for five-class retinal fundus image classification, model evaluation, Grad-CAM visualisation, and Claude-generated explanations.
+**Retinal fundus image analysis for diabetic retinopathy (DR) grading, with explainable AI and LLM-generated explanations.**
 
-> **Safety:** This is an educational/research prototype, not a medical device. It must not be used for diagnosis, screening, treatment, or clinical decisions. Model softmax scores are not calibrated clinical probabilities.
+## ✨ Features
 
-## 1. Requirements
+- **Five-class DR grading:** No DR, Mild, Moderate, Severe, Proliferative DR
+- **Transfer learning:** ImageNet-pretrained EfficientNet-B0 fine-tuned on retinal images
+- **Official data splits:** trains on `train`, selects the best checkpoint on `valid`, and reports final metrics once on the untouched `test` split
+- **Class-imbalance handling:** weighted cross-entropy loss
+- **Explainability:** Grad-CAM overlay highlighting regions that influenced the prediction
+- **LLM explanations:** Claude explains the model output in plain language, without claiming to inspect the image itself
+- **Evaluation dashboard:** accuracy, macro precision/recall/F1 and per-class metrics shown in the app
 
-- Python 3.10 or 3.11 recommended
-- VS Code + PowerShell
-- Internet connection for the first pretrained-weight download
-- Optional NVIDIA GPU with a compatible PyTorch CUDA setup
-- Optional Anthropic API key for Claude explanations
+---
 
-## 2. Dataset layout
+## 🧱 Tech Stack
 
-The training script currently expects an **ImageFolder** layout: one folder per class, with images inside each folder.
+| Layer | Technology |
+|---|---|
+| Language | Python 3.10 / 3.11 |
+| Deep learning | PyTorch, torchvision (EfficientNet-B0) |
+| Data handling | pandas, Pillow, NumPy |
+| Evaluation | scikit-learn (accuracy, precision, recall, F1, confusion matrix) |
+| Explainability | Grad-CAM (custom implementation with forward/backward hooks), OpenCV |
+| Web interface | Streamlit |
+| LLM explanations | Anthropic Claude API (`anthropic` SDK) |
+| Config | python-dotenv |
 
-Example:
+---
 
-```text
+## 🏗️ How It Works
+
+```
+Fundus image
+     │
+     ▼
+Resize 224×224 + ImageNet normalisation
+     │
+     ▼
+EfficientNet-B0 (fine-tuned, 5-class head)
+     │
+     ├──► Softmax class scores ──► Predicted grade
+     │
+     ├──► Grad-CAM heatmap (last conv block)
+     │
+     └──► Claude API ──► Plain-language explanation of the model output
+```
+
+**Training pipeline**
+1. Read labels from each split's `annotations.csv` (`Image name`, `Retinopathy grade`)
+2. Train on the official train split with augmentation (flip, rotation, brightness/contrast jitter)
+3. AdamW optimiser with ReduceLROnPlateau; best checkpoint chosen by validation accuracy
+4. One final evaluation of that checkpoint on the official test split → `models/metrics.json`
+
+---
+
+## 📂 Project Structure
+
+```
 RetinaLens/
-  dataset/
-    0/
-      image_001.png
-      image_002.png
-    1/
-      image_003.png
-    2/
-    3/
-    4/
+├── app.py              # Streamlit app: prediction, Grad-CAM, Claude explanation, metrics
+├── train.py            # Training + evaluation using the official splits
+├── requirements.txt
+├── .env.example        # Template for your Anthropic API key
+├── models/
+│   └── metrics.json    # Held-out test metrics (weights are git-ignored)
+├── notebooks/
+└── dataset/            # Not included; see below
 ```
 
-Descriptive names are also fine, for example:
+---
 
-```text
-dataset/
-  No_DR/
-  Mild/
-  Moderate/
-  Severe/
-  Proliferative_DR/
+## 📊 Dataset
+
+The expected layout is:
+
+```
+dataset/Datasets/Diabetic Retinopathy/
+├── train/  annotations.csv  + images
+├── valid/  annotations.csv  + images
+└── test/   annotations.csv  + images
 ```
 
-The script uses the folder names as the class labels and sorts them alphabetically. Check the printed class order before interpreting results.
+Each `annotations.csv` contains `Image name`, `Retinopathy grade` (0–4), `Risk of macular edema` and `Caption`. Only the grade is used as the target.
 
-If the Kaggle download instead contains a CSV plus one shared images folder, this version needs a small dataset-loader adaptation; do not just point `--data-dir` at the raw folder and expect it to work.
+| Split | Images |
+|---|---|
+| Train | 1,577 |
+| Valid | 339 |
+| Test | 338 |
 
-**Important:** If patient IDs are available, split by patient rather than randomly by image to avoid patient leakage. This starter script makes a stratified image-level split and should be upgraded to patient-level splitting for a serious final-year evaluation.
 
-## 3. Install and train (PowerShell)
+## 📈 Results
 
-From the RetinaLens project root:
+Evaluated once on the official held-out test split (338 images; EfficientNet-B0, 15 epochs, 224×224, CPU training):
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
+| Metric | Score |
+|---|---|
+| Accuracy | 65.4% |
+| Macro precision | 60.4% |
+| Macro recall | 58.3% |
+| Macro F1 | 58.4% |
 
-Put the extracted class folders inside `dataset/`, then run:
+| Class | Precision | Recall | F1 | Support |
+|---|---|---|---|---|
+| 0 – No DR | 0.80 | 0.76 | 0.78 | 178 |
+| 1 – Mild | 0.28 | 0.48 | 0.36 | 44 |
+| 2 – Moderate | 0.72 | 0.55 | 0.63 | 76 |
+| 3 – Severe | 0.68 | 0.52 | 0.59 | 25 |
+| 4 – Proliferative DR | 0.53 | 0.60 | 0.56 | 15 |
 
-```powershell
-python train.py --data-dir dataset --epochs 5 --batch-size 8
-```
+Macro F1 is the more honest headline number given the class imbalance. Mild DR is the hardest grade for the model, as it is subtle even for human graders. Per-class figures for Severe and Proliferative are based on very few test images and are noisy.
 
-For a quick smoke test, use `--epochs 1`. Five epochs are only a starting point; choose training duration based on validation performance and compute.
+---
 
-The first run downloads pretrained EfficientNet-B0 weights. The trained model and held-out metrics are saved to:
+## ⚠️ Limitations
 
-- `models/retinal_efficientnet.pth`
-- `models/metrics.json`
+- Image-level splits from the dataset provider; patient identifiers are unavailable, so patient leakage and duplicate images cannot be ruled out
+- Small dataset and strong class imbalance
+- 224×224 input loses fine lesion detail; higher resolution is likely to help
+- No external validation on an independent dataset
+- Softmax scores are uncalibrated
+- Grad-CAM shows influential regions for the model, not proof of pathology
+- Claude receives only the predicted class and scores, never the image, and does not diagnose
 
-The test set is held out from training and validation. Do not tune the model repeatedly against the test set.
+## 🔭 Future Work
 
-## 4. Configure Claude
+Higher-resolution training, stronger augmentation, probability calibration, image-quality checks, patient-level splitting, external validation, and use of the macular-edema label for multi-task learning.
 
-Create a `.env` file in the project root by copying `.env.example`:
+---
 
-```powershell
-Copy-Item .env.example .env
-notepad .env
-```
+## 👩‍💻 Author
 
-Set your key:
+**Akanksha Rayabharam**
 
-```env
-ANTHROPIC_API_KEY=your_real_key
-CLAUDE_MODEL=claude-3-5-sonnet-20241022
-```
+## 📄 Disclaimer
 
-Use a Claude model name currently enabled for your Anthropic account if that example model is unavailable. Never commit `.env` or expose the key in frontend code.
-
-Claude receives only the predicted class and model scores in this prototype. It does not independently diagnose the image.
-
-## 5. Launch the app
-
-From the project root:
-
-```powershell
-streamlit run app.py
-```
-
-Upload a JPG/PNG fundus image. The dashboard displays class scores, Grad-CAM, Claude explanation (if configured), and held-out evaluation metrics.
-
-## 6. What the percentages mean
-
-- **Test accuracy:** fraction of held-out images classified correctly.
-- **Macro precision/recall/F1:** class-wise metric calculated per class and averaged equally.
-- **Per-class metrics:** precision, recall and F1 for each folder/class.
-- **Softmax score:** relative model score across the five classes. It is not automatically calibrated and is not the probability that a patient has a disease.
-
-Do not claim a target accuracy in advance. Report the actual held-out results, dataset size, class distribution, split method, model settings, and limitations.
-
-## 7. Current limitations / next research improvements
-
-1. Confirm the dataset's label definitions and class order against its source documentation.
-2. Check duplicate images and patient identifiers; use patient-level splits where possible.
-3. Address class imbalance and report per-class metrics, not accuracy alone.
-4. Tune augmentation and training settings using validation data only.
-5. Calibrate probabilities on validation data if probability estimates are needed.
-6. Consider external validation on an independent dataset.
-7. Review Grad-CAM maps critically: they show influential regions for the model, not proof of pathology.
-8. Add unit tests, image-quality checks, and robust error handling before a formal demonstration.
+For educational and research purposes only. Not for clinical use.
